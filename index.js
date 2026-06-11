@@ -1,118 +1,89 @@
 const express = require('express');
-const cors = require('cors');
-const fetch = require('node-fetch');
-
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
-const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
-
-app.use(cors({
-  origin: [
-    'https://custommagnets.co.uk',
-    'https://c0vrcs-zn.myshopify.com',
-    /\.myshopify\.com$/,
-    /\.onrender\.com$/
-  ],
-  methods: ['POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type']
-}));
-
-app.use(express.json({ limit: '10mb' }));
-
-app.get('/', (req, res) => {
-  res.json({ status: 'Custom Magnets Quote Proxy is running' });
+/* ── CORS — handle all origins including Shopify preview domains ── */
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
 });
 
+app.use(express.json({ limit: '1mb' }));
+
+const SHOPIFY_STORE = process.env.SHOPIFY_STORE || 'custommagnets.myshopify.com';
+const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
+
 app.post('/quote', async (req, res) => {
-  const {
-    submission_type,
-    product_title,
-    material,
-    shape,
-    size,
-    quantity,
-    unit_price,
-    total_price,
-    saving,
-    artwork_filename,
-    artwork_notes,
-    customer_name,
-    customer_email,
-    custom_brief
-  } = req.body;
-
-  if (!customer_email) {
-    return res.status(400).json({ error: 'Missing required field: customer_email' });
-  }
-
-  const note = [
-    `CONFIGURATOR QUOTE SUBMISSION`,
-    `Type: ${submission_type || 'Standard'}`,
-    `Submitted: ${new Date().toISOString()}`,
-    ``,
-    `--- ORDER DETAILS ---`,
-    `Product: ${product_title || 'N/A'}`,
-    `Material: ${material || 'N/A'}`,
-    `Shape: ${shape || 'N/A'}`,
-    `Size: ${size || 'N/A'}`,
-    `Quantity: ${quantity || 'N/A'}`,
-    `Unit price: ${unit_price || 'N/A'}`,
-    `Estimated total: ${total_price || 'N/A'}`,
-    `Saving: ${saving || 'N/A'}`,
-    ``,
-    `--- ARTWORK ---`,
-    `File: ${artwork_filename || 'None'}`,
-    `Notes: ${artwork_notes || 'None'}`,
-    ``,
-    `--- CUSTOMER ---`,
-    `Name: ${customer_name || 'N/A'}`,
-    `Email: ${customer_email}`,
-    `Custom brief: ${custom_brief || 'N/A'}`
-  ].join('\n');
-
-  const lineItemPrice = unit_price
-    ? unit_price.replace('£', '').replace(',', '')
-    : '0.00';
-
-  const lineItemQty = quantity
-    ? parseInt(String(quantity).replace(',', ''), 10) || 1
-    : 1;
-
-  const draftOrder = {
-    draft_order: {
-      line_items: [{
-        title: product_title || 'Custom Magnet Quote',
-        quantity: lineItemQty,
-        price: lineItemPrice,
-        requires_shipping: true
-      }],
-      customer: {
-        email: customer_email
-      },
-      note,
-      tags: 'quote-configurator,needs-review',
-      note_attributes: [
-        { name: 'Submission Type', value: submission_type || 'Standard' },
-        { name: 'Product', value: product_title || '' },
-        { name: 'Material', value: material || '' },
-        { name: 'Shape', value: shape || '' },
-        { name: 'Size', value: size || '' },
-        { name: 'Quantity', value: String(quantity || '') },
-        { name: 'Unit Price', value: unit_price || '' },
-        { name: 'Estimated Total', value: total_price || '' },
-        { name: 'Saving', value: saving || '' },
-        { name: 'Artwork File', value: artwork_filename || 'None' },
-        { name: 'Customer Name', value: customer_name || '' },
-        { name: 'Customer Email', value: customer_email || '' }
-      ]
-    }
-  };
-
   try {
-    const shopifyRes = await fetch(
-      `https://${SHOPIFY_STORE}/admin/api/2024-01/draft_orders.json`,
+    const p = req.body;
+    if (!p.customer_email || !p.submission_type) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const noteLines = [
+      '═══ QUOTE SUBMISSION ═══',
+      'Type: ' + p.submission_type,
+      '',
+      '── Product ──',
+      'Product: ' + (p.product_title || 'N/A'),
+      'Material: ' + (p.material || 'N/A'),
+      'Shape: ' + (p.shape || 'N/A'),
+      'Size: ' + (p.size || 'N/A'),
+      'Quantity: ' + (p.quantity || 'N/A'),
+      'Unit price: ' + (p.unit_price || 'N/A'),
+      'Total: ' + (p.total_price || 'N/A'),
+      'Saving: ' + (p.saving || 'N/A'),
+      '',
+      '── Artwork ──',
+      'Filename: ' + (p.artwork_filename || 'None'),
+      'Download: ' + (p.artwork_url || 'No file uploaded'),
+      'Notes: ' + (p.artwork_notes || 'None'),
+      '',
+      '── Customer ──',
+      'Name: ' + (p.customer_name || 'N/A'),
+      'Email: ' + (p.customer_email || 'N/A'),
+    ];
+
+    if (p.custom_brief) {
+      noteLines.push('', '── Custom Brief ──', p.custom_brief);
+    }
+
+    const unitPrice = p.unit_price ? parseFloat(p.unit_price.replace('£', '')) : 0;
+    const qty = p.quantity ? parseInt(p.quantity.replace(/,/g, ''), 10) : 1;
+
+    const draftOrder = {
+      draft_order: {
+        line_items: [{
+          title: p.product_title || 'Custom Quote',
+          quantity: qty || 1,
+          price: unitPrice.toFixed(2),
+          requires_shipping: true
+        }],
+        note: noteLines.join('\n'),
+        tags: 'quote-configurator,needs-review',
+        note_attributes: [
+          { name: 'Submission Type', value: p.submission_type || '' },
+          { name: 'Product', value: p.product_title || '' },
+          { name: 'Material', value: p.material || '' },
+          { name: 'Shape', value: p.shape || '' },
+          { name: 'Size', value: p.size || '' },
+          { name: 'Quantity', value: p.quantity || '' },
+          { name: 'Unit Price', value: p.unit_price || '' },
+          { name: 'Estimated Total', value: p.total_price || '' },
+          { name: 'Artwork File', value: p.artwork_filename || '' },
+          { name: 'Artwork URL', value: p.artwork_url || '' },
+          { name: 'Artwork Notes', value: p.artwork_notes || '' },
+          { name: 'Customer Name', value: p.customer_name || '' },
+          { name: 'Customer Email', value: p.customer_email || '' }
+        ],
+        email: p.customer_email || undefined
+      }
+    };
+
+    const response = await fetch(
+      'https://' + SHOPIFY_STORE + '/admin/api/2024-01/draft_orders.json',
       {
         method: 'POST',
         headers: {
@@ -123,27 +94,25 @@ app.post('/quote', async (req, res) => {
       }
     );
 
-    const data = await shopifyRes.json();
+    const data = await response.json();
 
-    if (!shopifyRes.ok) {
+    if (!response.ok) {
       console.error('Shopify error:', JSON.stringify(data));
-      return res.status(500).json({ error: 'Shopify draft order creation failed', details: data });
+      return res.status(response.status).json({ error: 'Shopify API error', details: data });
     }
 
-    console.log(`Draft order created: ${data.draft_order?.id} for ${customer_email}`);
-    return res.json({
-      success: true,
-      draft_order_id: data.draft_order?.id,
-      draft_order_name: data.draft_order?.name
-    });
+    console.log('Draft order created:', data.draft_order?.id);
+    res.json({ success: true, draft_order_id: data.draft_order?.id });
 
   } catch (err) {
     console.error('Server error:', err.message);
-    return res.status(500).json({ error: 'Internal server error', message: err.message });
+    res.status(500).json({ error: 'Server error', message: err.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`CM Quote Proxy running on port ${PORT}`);
-  console.log(`Store: ${SHOPIFY_STORE}`);
-});
+/* Health check */
+app.get('/', (req, res) => res.json({ status: 'ok', service: 'cm-quote-proxy' }));
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log('cm-quote-proxy running on port ' + PORT));
