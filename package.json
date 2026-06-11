@@ -1,14 +1,14 @@
 {
   "name": "cm-quote-proxy",
-  "version": "1.0.0",
-  "description": "Custom Magnets quote proxy — creates Shopify draft orders from configurator submissions",
-  "main": "index.js",
+  "version": "2.0.0",
+  "private": true,
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "node-fetch": "^2.7.0"
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
