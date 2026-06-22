@@ -102,7 +102,7 @@ app.post('/quote', async (req, res) => {
     }
 
     console.log('Draft order created:', data.draft_order?.id);
-    res.json({ success: true, draft_order_id: data.draft_order?.id });
+    res.json({ success: true, draft_order_id: data.draft_order?.id, invoice_url: data.draft_order?.invoice_url });
 
   } catch (err) {
     console.error('Server error:', err.message);
