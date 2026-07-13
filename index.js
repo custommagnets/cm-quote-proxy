@@ -1,10 +1,19 @@
 const express = require('express');
 const nodemailer = require('nodemailer');
+const rateLimit = require('express-rate-limit');
 const app = express();
 
-/* ── CORS — handle all origins including Shopify preview domains ── */
+/* ── CORS — restrict to Custom Magnets storefront origins ── */
+const ALLOWED_ORIGINS = [
+  'https://custommagnets.co.uk',
+  'https://www.custommagnets.co.uk',
+  'https://custommagnets.myshopify.com'
+];
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(204).end();
@@ -22,7 +31,7 @@ const SMTP_PASS = process.env.SMTP_PASS;
 const EMAIL_FROM = process.env.EMAIL_FROM || 'Custom Magnets <sales@custommagnets.co.uk>';
 const EMAIL_TO  = process.env.EMAIL_TO  || 'sales@custommagnets.co.uk';
 
-const API_VERSION = '2024-01';
+const API_VERSION = '2026-04';
 const QTY_TIERS = [25, 50, 100, 250, 500, 1000];
 const QTY_MULTS = [1.0, 0.95, 0.88, 0.80, 0.72, 0.64];
 
@@ -142,7 +151,15 @@ function buildEmailHTML(p) {
 
 /* ── Quote endpoint ── */
 
-app.post('/quote', async (req, res) => {
+const quoteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many quote requests. Please try again later.' }
+});
+
+app.post('/quote', quoteLimiter, async (req, res) => {
   try {
     const p = req.body;
     if (!p.customer_email || !p.submission_type) {
