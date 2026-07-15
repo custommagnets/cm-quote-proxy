@@ -83,29 +83,26 @@ async function validatePrice(handle, variantTitle, quantity) {
  * that metafield so a direct product-page purchase is charged exactly what was quoted.
  * Mirrors the tierFor()/priceFor() math in cmproduct.liquid so results match the display.
  */
-async function validateTieredPrice(handle, variantId, sizeName, quantity) {
-  const data = await shopifyFetch(
-    '/products.json?handle=' + encodeURIComponent(handle) + '&fields=id,title,variants'
+async function validateTieredPrice(handle, sizeName, quantity) {
+  const query = 'query($handle: String!) { productByHandle(handle: $handle) { id title metafield(namespace: "custom_magnets", key: "pricing_table") { value } } }';
+  const res = await fetch(
+    'https://' + SHOPIFY_STORE + '/admin/api/' + API_VERSION + '/graphql.json',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': SHOPIFY_TOKEN },
+      body: JSON.stringify({ query: query, variables: { handle: handle } })
+    }
   );
-  const product = data.products && data.products[0];
-  if (!product) return null;
-
-  var variant = null;
-  if (variantId) variant = product.variants.find(function(v) { return String(v.id) === String(variantId); });
-  if (!variant && sizeName) variant = product.variants.find(function(v) { return v.option1 === sizeName; });
-  if (!variant) return null;
-
-  const mfData = await shopifyFetch(
-    '/products/' + product.id + '/metafields.json?namespace=custom_magnets&key=pricing_table'
-  );
-  const mf = mfData.metafields && mfData.metafields[0];
-  if (!mf) return null;
+  const json = await res.json();
+  if (!res.ok || json.errors) throw { status: res.status, data: json.errors || json };
+  const product = json.data && json.data.productByHandle;
+  if (!product || !product.metafield) return null;
 
   var table;
-  try { table = JSON.parse(mf.value); } catch (e) { return null; }
+  try { table = JSON.parse(product.metafield.value); } catch (e) { return null; }
   if (!table || !table.options) return null;
 
-  const option = table.options.find(function(o) { return o.name === (sizeName || variant.option1); });
+  const option = table.options.find(function(o) { return o.name === sizeName; });
   if (!option || !option.rows || !option.rows.length) return null;
 
   const rows = option.rows;
@@ -121,7 +118,6 @@ async function validateTieredPrice(handle, variantId, sizeName, quantity) {
   const saving = Math.round((1 - (unitPrice / baseUnit)) * 100);
 
   return {
-    variant_id: variant.id,
     product_title: product.title,
     size: option.name,
     unit_price: +unitPrice.toFixed(5),
@@ -379,11 +375,11 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
   try {
     const p = req.body;
     const quantity = parseInt(p.quantity, 10);
-    if (!p.product_handle || !quantity || quantity < 1 || (!p.variant_id && !p.size)) {
+    if (!p.product_handle || !p.size || !quantity || quantity < 1) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const validated = await validateTieredPrice(p.product_handle, p.variant_id, p.size, quantity);
+    const validated = await validateTieredPrice(p.product_handle, p.size, quantity);
     if (!validated) {
       return res.status(422).json({ error: 'Could not validate price for this product, size, and quantity' });
     }
