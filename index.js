@@ -385,12 +385,20 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
       return res.status(422).json({ error: 'Could not validate price for this product, size, and quantity' });
     }
 
+    /*
+     * Charge quantity 1 at the exact validated total, rather than the rounded
+     * per-unit price times quantity. Shopify's checkout multiplies price × quantity
+     * itself, so sending a rounded unit price (e.g. £1.39767 -> "1.40") at qty 300
+     * would let a fraction-of-a-penny rounding error compound into a real
+     * overcharge (£420.00 vs the £419.30 actually quoted). The true quantity is
+     * still recorded in the title, note, and note_attributes for the order record.
+     */
     const draftOrder = {
       draft_order: {
         line_items: [{
-          title: validated.product_title,
-          quantity: quantity,
-          price: validated.unit_price.toFixed(2),
+          title: validated.product_title + ' (' + quantity + ' units, ' + validated.size + ')',
+          quantity: 1,
+          price: validated.total.toFixed(2),
           requires_shipping: true
         }],
         note: [
@@ -448,35 +456,8 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
   }
 });
 
-/* Health check + one-time OAuth token capture */
-app.get('/', async (req, res) => {
-  if (req.query.code && req.query.shop) {
-    try {
-      const tokenRes = await fetch('https://' + req.query.shop + '/admin/oauth/access_token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: process.env.SHOPIFY_CLIENT_ID,
-          client_secret: process.env.SHOPIFY_CLIENT_SECRET,
-          code: req.query.code
-        })
-      });
-      const tokenData = await tokenRes.json();
-      if (tokenData.access_token) {
-        return res.send(
-          '<pre style="font-size:16px;padding:24px;">' +
-          'COPY THIS INTO RENDER as SHOPIFY_TOKEN, then delete this text from your screen:\n\n' +
-          tokenData.access_token +
-          '</pre>'
-        );
-      }
-      return res.status(500).json({ error: 'Token exchange failed', details: tokenData });
-    } catch (e) {
-      return res.status(500).json({ error: 'Token exchange error', message: e.message });
-    }
-  }
-  res.json({ status: 'ok', service: 'cm-quote-proxy' });
-});
+/* Health check */
+app.get('/', (req, res) => res.json({ status: 'ok', service: 'cm-quote-proxy' }));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
