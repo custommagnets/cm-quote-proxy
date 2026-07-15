@@ -441,8 +441,8 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Server error:', err.message);
-    res.status(500).json({ error: 'Server error', message: err.message });
+    console.error('Server error:', err && err.message, err && JSON.stringify(err.data || err));
+    res.status(500).json({ error: 'Server error', message: (err && err.message) || String(err), status: err && err.status, data: err && err.data });
   }
 });
 
