@@ -277,7 +277,7 @@ app.post('/quote', quoteLimiter, async (req, res) => {
           console.log('Price validated: ' + p.product_handle + ' @ £' + validated.unit_price + '/unit × ' + p.quantity_raw);
         }
       } catch (e) {
-        console.error('Price validation failed (using client price):', e.message || e);
+        console.error('Price validation failed (using client price):', (e && e.status) || '', JSON.stringify((e && e.data) || (e && e.message) || e));
       }
     }
 
@@ -402,8 +402,9 @@ app.post('/quote', quoteLimiter, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Server error:', err.message);
-    res.status(500).json({ error: 'Server error', message: err.message });
+    console.error('Server error:', (err && err.status) || '', JSON.stringify((err && err.data) || (err && err.message) || err));
+    const status = (err && err.status) || 500;
+    res.status(status).json({ error: 'Server error', message: (err && err.message) || 'Unexpected error' });
   }
 });
 
@@ -425,12 +426,20 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
       return res.status(422).json({ error: 'Could not validate price for this product, size, and quantity' });
     }
 
+    /*
+     * Charge quantity 1 at the exact validated total, rather than the rounded
+     * per-unit price times quantity. Shopify's checkout multiplies price × quantity
+     * itself, so sending a rounded unit price (e.g. £1.39767 -> "1.40") at qty 300
+     * would let a fraction-of-a-penny rounding error compound into a real
+     * overcharge (£420.00 vs the £419.30 actually quoted). The true quantity is
+     * still recorded in the title, note, and note_attributes for the order record.
+     */
     const draftOrder = {
       draft_order: {
         line_items: [{
-          title: validated.product_title,
-          quantity: quantity,
-          price: validated.unit_price.toFixed(2),
+          title: validated.product_title + ' (' + quantity + ' units, ' + validated.size + ')',
+          quantity: 1,
+          price: validated.total.toFixed(2),
           requires_shipping: true
         }],
         note: [
@@ -482,8 +491,9 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Server error:', err && err.message, err && JSON.stringify(err.data || err));
-    res.status(500).json({ error: 'Server error', message: err && err.message });
+    console.error('Server error:', (err && err.status) || '', JSON.stringify((err && err.data) || (err && err.message) || err));
+    const status = (err && err.status) || 500;
+    res.status(status).json({ error: 'Shopify API error', message: (err && err.message) || 'Unexpected error' });
   }
 });
 
