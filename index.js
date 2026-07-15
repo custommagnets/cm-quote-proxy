@@ -448,8 +448,35 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
   }
 });
 
-/* Health check */
-app.get('/', (req, res) => res.json({ status: 'ok', service: 'cm-quote-proxy' }));
+/* Health check + one-time OAuth token capture */
+app.get('/', async (req, res) => {
+  if (req.query.code && req.query.shop) {
+    try {
+      const tokenRes = await fetch('https://' + req.query.shop + '/admin/oauth/access_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: process.env.SHOPIFY_CLIENT_ID,
+          client_secret: process.env.SHOPIFY_CLIENT_SECRET,
+          code: req.query.code
+        })
+      });
+      const tokenData = await tokenRes.json();
+      if (tokenData.access_token) {
+        return res.send(
+          '<pre style="font-size:16px;padding:24px;">' +
+          'COPY THIS INTO RENDER as SHOPIFY_TOKEN, then delete this text from your screen:\n\n' +
+          tokenData.access_token +
+          '</pre>'
+        );
+      }
+      return res.status(500).json({ error: 'Token exchange failed', details: tokenData });
+    } catch (e) {
+      return res.status(500).json({ error: 'Token exchange error', message: e.message });
+    }
+  }
+  res.json({ status: 'ok', service: 'cm-quote-proxy' });
+});
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
