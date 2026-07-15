@@ -131,7 +131,8 @@ async function validateTieredPrice(handle, sizeName, quantity) {
 /* ── Google Reviews (GBP, via Places API New) ──
  * Uses the Place Details (New) endpoint with an API key — no OAuth required, intended
  * for exactly this "display reviews on your own site" use case. Google returns at most
- * 5 reviews per place; sorted newest-first here so the homepage reads as genuinely live.
+ * 5 reviews per place; there's no supported way to request a specific sort order (no
+ * reviewsSort/orderBy param exists on this endpoint) — Google picks which 5 to return.
  * Response is cached in-memory to keep Places API usage (and cost) minimal — reviews
  * don't change often enough to justify fetching on every page load. */
 
@@ -141,7 +142,7 @@ var reviewsCache = { data: null, fetchedAt: 0 };
 async function fetchGoogleReviews() {
   if (!GOOGLE_PLACES_API_KEY || !GOOGLE_PLACE_ID) return null;
 
-  const url = 'https://places.googleapis.com/v1/places/' + GOOGLE_PLACE_ID + '?reviewsSort=newest';
+  const url = 'https://places.googleapis.com/v1/places/' + GOOGLE_PLACE_ID;
   const res = await fetch(url, {
     headers: {
       'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
