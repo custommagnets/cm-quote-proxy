@@ -236,7 +236,7 @@ app.post('/quote', quoteLimiter, async (req, res) => {
           console.log('Price validated: ' + p.product_handle + ' @ £' + validated.unit_price + '/unit × ' + p.quantity_raw);
         }
       } catch (e) {
-        console.error('Price validation failed (using client price):', e.message || e);
+        console.error('Price validation failed (using client price):', (e && e.status) || '', JSON.stringify((e && e.data) || (e && e.message) || e));
       }
     }
 
@@ -361,8 +361,9 @@ app.post('/quote', quoteLimiter, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Server error:', err.message);
-    res.status(500).json({ error: 'Server error', message: err.message });
+    console.error('Server error:', (err && err.status) || '', JSON.stringify((err && err.data) || (err && err.message) || err));
+    const status = (err && err.status) || 500;
+    res.status(status).json({ error: 'Server error', message: (err && err.message) || 'Unexpected error', details: err && err.data });
   }
 });
 
@@ -441,8 +442,9 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Server error:', err && err.message, err && JSON.stringify(err.data || err));
-    res.status(500).json({ error: 'Server error', message: err && err.message });
+    console.error('Server error:', (err && err.status) || '', JSON.stringify((err && err.data) || (err && err.message) || err));
+    const status = (err && err.status) || 500;
+    res.status(status).json({ error: 'Shopify API error', message: (err && err.message) || 'Unexpected error', details: err && err.data });
   }
 });
 
