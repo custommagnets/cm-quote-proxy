@@ -363,7 +363,7 @@ app.post('/quote', quoteLimiter, async (req, res) => {
   } catch (err) {
     console.error('Server error:', (err && err.status) || '', JSON.stringify((err && err.data) || (err && err.message) || err));
     const status = (err && err.status) || 500;
-    res.status(status).json({ error: 'Server error', message: (err && err.message) || 'Unexpected error', details: err && err.data });
+    res.status(status).json({ error: 'Server error', message: (err && err.message) || 'Unexpected error' });
   }
 });
 
@@ -444,7 +444,7 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
   } catch (err) {
     console.error('Server error:', (err && err.status) || '', JSON.stringify((err && err.data) || (err && err.message) || err));
     const status = (err && err.status) || 500;
-    res.status(status).json({ error: 'Shopify API error', message: (err && err.message) || 'Unexpected error', details: err && err.data });
+    res.status(status).json({ error: 'Shopify API error', message: (err && err.message) || 'Unexpected error' });
   }
 });
 
