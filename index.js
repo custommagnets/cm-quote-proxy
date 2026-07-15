@@ -76,6 +76,60 @@ async function validatePrice(handle, variantTitle, quantity) {
   return { variant_id: variant.id, base_price: basePrice, unit_price: unitPrice, total: total, saving: saving };
 }
 
+/*
+ * Product pages (cmproduct.liquid) quote a per-product tiered price curve stored in the
+ * custom_magnets.pricing_table metafield — a different, more granular system than the
+ * flat QTY_MULTS table above (which only the configurator uses). This validates against
+ * that metafield so a direct product-page purchase is charged exactly what was quoted.
+ * Mirrors the tierFor()/priceFor() math in cmproduct.liquid so results match the display.
+ */
+async function validateTieredPrice(handle, variantId, sizeName, quantity) {
+  const data = await shopifyFetch(
+    '/products.json?handle=' + encodeURIComponent(handle) + '&fields=id,title,variants'
+  );
+  const product = data.products && data.products[0];
+  if (!product) return null;
+
+  var variant = null;
+  if (variantId) variant = product.variants.find(function(v) { return String(v.id) === String(variantId); });
+  if (!variant && sizeName) variant = product.variants.find(function(v) { return v.option1 === sizeName; });
+  if (!variant) return null;
+
+  const mfData = await shopifyFetch(
+    '/products/' + product.id + '/metafields.json?namespace=custom_magnets&key=pricing_table'
+  );
+  const mf = mfData.metafields && mfData.metafields[0];
+  if (!mf) return null;
+
+  var table;
+  try { table = JSON.parse(mf.value); } catch (e) { return null; }
+  if (!table || !table.options) return null;
+
+  const option = table.options.find(function(o) { return o.name === (sizeName || variant.option1); });
+  if (!option || !option.rows || !option.rows.length) return null;
+
+  const rows = option.rows;
+  const qty = parseInt(quantity, 10);
+  if (!qty || qty < 1) return null;
+
+  var tierIdx = 0;
+  for (var i = 0; i < rows.length; i++) { if (qty >= rows[i][0]) tierIdx = i; }
+  const tierRow = rows[tierIdx];
+  const unitPrice = tierRow[1] / tierRow[0];
+  const total = +(unitPrice * qty).toFixed(2);
+  const baseUnit = rows[0][1] / rows[0][0];
+  const saving = Math.round((1 - (unitPrice / baseUnit)) * 100);
+
+  return {
+    variant_id: variant.id,
+    product_title: product.title,
+    size: option.name,
+    unit_price: +unitPrice.toFixed(5),
+    total: total,
+    saving: saving
+  };
+}
+
 /* ── Email ── */
 
 var transporter = null;
@@ -157,6 +211,14 @@ const quoteLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many quote requests. Please try again later.' }
+});
+
+const checkoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many checkout requests. Please try again later.' }
 });
 
 app.post('/quote', quoteLimiter, async (req, res) => {
@@ -300,6 +362,86 @@ app.post('/quote', quoteLimiter, async (req, res) => {
       draft_order_id: data.draft_order?.id,
       invoice_url: data.draft_order?.invoice_url,
       email_sent: emailSent
+    });
+
+  } catch (err) {
+    console.error('Server error:', err.message);
+    res.status(500).json({ error: 'Server error', message: err.message });
+  }
+});
+
+/*
+ * Direct product-page "Add to basket" purchases. Unlike /quote, this is a real checkout —
+ * so it fails closed: if the tiered price can't be validated server-side against the
+ * pricing_table metafield, no draft order is created and the client price is never trusted.
+ */
+app.post('/price-checkout', checkoutLimiter, async (req, res) => {
+  try {
+    const p = req.body;
+    const quantity = parseInt(p.quantity, 10);
+    if (!p.product_handle || !quantity || quantity < 1 || (!p.variant_id && !p.size)) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const validated = await validateTieredPrice(p.product_handle, p.variant_id, p.size, quantity);
+    if (!validated) {
+      return res.status(422).json({ error: 'Could not validate price for this product, size, and quantity' });
+    }
+
+    const draftOrder = {
+      draft_order: {
+        line_items: [{
+          title: validated.product_title,
+          quantity: quantity,
+          price: validated.unit_price.toFixed(2),
+          requires_shipping: true
+        }],
+        note: [
+          '═══ DIRECT PRODUCT PURCHASE ═══',
+          'Product: ' + validated.product_title,
+          'Size: ' + validated.size,
+          'Quantity: ' + quantity,
+          'Validated unit price: £' + validated.unit_price.toFixed(2),
+          'Validated total: £' + validated.total.toFixed(2)
+        ].join('\n'),
+        tags: 'product-page-purchase',
+        note_attributes: [
+          { name: 'Product', value: validated.product_title },
+          { name: 'Size', value: validated.size },
+          { name: 'Quantity', value: String(quantity) },
+          { name: 'Unit Price', value: '£' + validated.unit_price.toFixed(2) },
+          { name: 'Total', value: '£' + validated.total.toFixed(2) },
+          { name: 'Price Validated', value: 'Yes' }
+        ]
+      }
+    };
+
+    const response = await fetch(
+      'https://' + SHOPIFY_STORE + '/admin/api/' + API_VERSION + '/draft_orders.json',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': SHOPIFY_TOKEN
+        },
+        body: JSON.stringify(draftOrder)
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('Shopify error:', JSON.stringify(data));
+      return res.status(response.status).json({ error: 'Shopify API error', details: data });
+    }
+
+    console.log('Direct purchase draft order created:', data.draft_order?.id, '@ £' + validated.total.toFixed(2));
+
+    res.json({
+      success: true,
+      draft_order_id: data.draft_order?.id,
+      invoice_url: data.draft_order?.invoice_url,
+      total: validated.total
     });
 
   } catch (err) {
