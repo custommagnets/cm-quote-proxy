@@ -14,7 +14,7 @@ app.use((req, res, next) => {
   if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(204).end();
   next();
@@ -30,6 +30,8 @@ const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
 const EMAIL_FROM = process.env.EMAIL_FROM || 'Custom Magnets <sales@custommagnets.co.uk>';
 const EMAIL_TO  = process.env.EMAIL_TO  || 'sales@custommagnets.co.uk';
+const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
+const GOOGLE_PLACE_ID = process.env.GOOGLE_PLACE_ID;
 
 const API_VERSION = '2026-04';
 const QTY_TIERS = [25, 50, 100, 250, 500, 1000];
@@ -123,6 +125,45 @@ async function validateTieredPrice(handle, sizeName, quantity) {
     unit_price: +unitPrice.toFixed(5),
     total: total,
     saving: saving
+  };
+}
+
+/* ── Google Reviews (GBP, via Places API New) ──
+ * Uses the Place Details (New) endpoint with an API key — no OAuth required, intended
+ * for exactly this "display reviews on your own site" use case. Google returns at most
+ * 5 reviews per place; sorted newest-first here so the homepage reads as genuinely live.
+ * Response is cached in-memory to keep Places API usage (and cost) minimal — reviews
+ * don't change often enough to justify fetching on every page load. */
+
+const REVIEWS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+var reviewsCache = { data: null, fetchedAt: 0 };
+
+async function fetchGoogleReviews() {
+  if (!GOOGLE_PLACES_API_KEY || !GOOGLE_PLACE_ID) return null;
+
+  const url = 'https://places.googleapis.com/v1/places/' + GOOGLE_PLACE_ID + '?reviewsSort=newest';
+  const res = await fetch(url, {
+    headers: {
+      'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+      'X-Goog-FieldMask': 'rating,userRatingCount,googleMapsUri,reviews.rating,reviews.text,reviews.authorAttribution,reviews.relativePublishTimeDescription,reviews.publishTime'
+    }
+  });
+  const data = await res.json();
+  if (!res.ok) throw { status: res.status, data: data };
+
+  return {
+    rating: data.rating || null,
+    review_count: data.userRatingCount || 0,
+    maps_url: data.googleMapsUri || null,
+    reviews: (data.reviews || []).map(function (r) {
+      return {
+        rating: r.rating || 5,
+        text: (r.text && r.text.text) || '',
+        author: (r.authorAttribution && r.authorAttribution.displayName) || 'Google user',
+        relative_time: r.relativePublishTimeDescription || '',
+        published_at: r.publishTime || null
+      };
+    })
   };
 }
 
@@ -446,6 +487,34 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
   }
 });
 
+/*
+ * GET /reviews — live Google Business Profile reviews for the homepage.
+ * Read-only, cached, no rate limiting needed beyond what caching already provides
+ * (at most one real Google API call every REVIEWS_CACHE_TTL_MS regardless of traffic).
+ */
+app.get('/reviews', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (reviewsCache.data && (now - reviewsCache.fetchedAt) < REVIEWS_CACHE_TTL_MS) {
+      return res.json(reviewsCache.data);
+    }
+
+    const fresh = await fetchGoogleReviews();
+    if (!fresh) {
+      return res.status(503).json({ error: 'Google Reviews not configured' });
+    }
+
+    reviewsCache = { data: fresh, fetchedAt: now };
+    res.json(fresh);
+
+  } catch (err) {
+    console.error('Reviews fetch failed:', err && (err.message || JSON.stringify(err.data || err)));
+    /* Serve stale cache rather than a hard failure if Google is briefly unavailable */
+    if (reviewsCache.data) return res.json(reviewsCache.data);
+    res.status(502).json({ error: 'Could not fetch reviews' });
+  }
+});
+
 /* Health check */
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'cm-quote-proxy' }));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -455,4 +524,5 @@ app.listen(PORT, () => {
   console.log('cm-quote-proxy running on port ' + PORT);
   if (!SHOPIFY_TOKEN) console.warn('WARNING: SHOPIFY_TOKEN not set');
   if (!transporter) console.warn('WARNING: SMTP not configured — emails will be skipped');
+  if (!GOOGLE_PLACES_API_KEY || !GOOGLE_PLACE_ID) console.warn('WARNING: Google Places API key/Place ID not set — /reviews will return 503');
 });
