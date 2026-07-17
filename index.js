@@ -78,6 +78,20 @@ async function validatePrice(handle, variantTitle, quantity) {
   return { variant_id: variant.id, base_price: basePrice, unit_price: unitPrice, total: total, saving: saving };
 }
 
+/* Plain variant price lookup — no tier multiplier applied. Used to work out what the
+ * native Shopify cart would charge for a tiered line (variant.price × quantity) so
+ * /cart-discount can compute exactly how much to knock off at checkout. */
+async function getVariantPrice(handle, variantTitle) {
+  const data = await shopifyFetch(
+    '/products.json?handle=' + encodeURIComponent(handle) + '&fields=id,title,variants'
+  );
+  const product = data.products && data.products[0];
+  if (!product) return null;
+  const variant = product.variants.find(function(v) { return v.title === variantTitle; });
+  if (!variant) return null;
+  return parseFloat(variant.price);
+}
+
 /*
  * Product pages (cmproduct.liquid) quote a per-product tiered price curve stored in the
  * custom_magnets.pricing_table metafield — a different, more granular system than the
@@ -495,6 +509,114 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
     console.error('Server error:', (err && err.status) || '', JSON.stringify((err && err.data) || (err && err.message) || err));
     const status = (err && err.status) || 500;
     res.status(status).json({ error: 'Shopify API error', message: (err && err.message) || 'Unexpected error' });
+  }
+});
+
+const cartDiscountLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again shortly.' }
+});
+
+function generateDiscountCode() {
+  return 'CM-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+}
+
+/*
+ * POST /cart-discount — the native-cart counterpart to /price-checkout.
+ *
+ * Product pages now add tiered-priced lines straight to Shopify's real cart via
+ * /cart/add.js (so multiple products/items accumulate normally in one basket instead
+ * of each purchase spawning its own draft order). But the native cart can only charge
+ * variant.price × quantity, which is always the UNDISCOUNTED base price for a tiered
+ * line — so before the customer reaches checkout, the storefront calls this endpoint
+ * with the tiered lines currently in their cart ({handle, size, quantity} — the same
+ * identifiers /price-checkout uses, read off each line's item properties). For each
+ * one it re-validates the true tiered total against the pricing_table metafield
+ * (server-side, never trusting a client-sent price) and compares it against what the
+ * live variant price would charge, then creates a single one-time discount code for
+ * the exact difference. The storefront applies it via /checkout?discount=CODE.
+ *
+ * Fails closed like /price-checkout: if any tiered line can't be validated, no
+ * discount code is created and checkout is blocked with an error rather than letting
+ * the customer be overcharged the undiscounted price.
+ */
+app.post('/cart-discount', cartDiscountLimiter, async (req, res) => {
+  try {
+    const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
+    if (!lines.length) {
+      return res.json({ success: true, discount_code: null, discount_amount: 0 });
+    }
+
+    var totalDiscount = 0;
+    var breakdown = [];
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var quantity = parseInt(line.quantity, 10);
+      if (!line.handle || !line.size || !quantity || quantity < 1) {
+        return res.status(400).json({ error: 'Missing required fields on cart line ' + i });
+      }
+
+      var validated = await validateTieredPrice(line.handle, line.size, quantity);
+      if (!validated) {
+        return res.status(422).json({ error: 'Could not validate price for "' + line.handle + '" (' + line.size + ')' });
+      }
+
+      var nativePrice = await getVariantPrice(line.handle, line.size);
+      if (nativePrice === null) {
+        return res.status(422).json({ error: 'Could not look up native price for "' + line.handle + '" (' + line.size + ')' });
+      }
+
+      var nativeTotal = +(nativePrice * quantity).toFixed(2);
+      var lineDiscount = Math.max(0, +(nativeTotal - validated.total).toFixed(2));
+      totalDiscount = +(totalDiscount + lineDiscount).toFixed(2);
+      breakdown.push({ handle: line.handle, size: line.size, quantity: quantity, native_total: nativeTotal, validated_total: validated.total, discount: lineDiscount });
+    }
+
+    if (totalDiscount <= 0) {
+      return res.json({ success: true, discount_code: null, discount_amount: 0 });
+    }
+
+    const code = generateDiscountCode();
+    const priceRule = {
+      price_rule: {
+        title: 'CM Tiered Price Correction — ' + code,
+        target_type: 'line_item',
+        target_selection: 'all',
+        allocation_method: 'across',
+        value_type: 'fixed_amount',
+        value: '-' + totalDiscount.toFixed(2),
+        customer_selection: 'all',
+        starts_at: new Date().toISOString(),
+        ends_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        usage_limit: 1
+      }
+    };
+
+    const ruleData = await shopifyFetch('/price_rules.json', {
+      method: 'POST',
+      body: JSON.stringify(priceRule)
+    });
+
+    const ruleId = ruleData.price_rule && ruleData.price_rule.id;
+    if (!ruleId) throw { status: 502, data: ruleData };
+
+    await shopifyFetch('/price_rules/' + ruleId + '/discount_codes.json', {
+      method: 'POST',
+      body: JSON.stringify({ discount_code: { code: code } })
+    });
+
+    console.log('Cart discount code created:', code, '-£' + totalDiscount.toFixed(2), JSON.stringify(breakdown));
+
+    res.json({ success: true, discount_code: code, discount_amount: totalDiscount });
+
+  } catch (err) {
+    console.error('Cart discount error:', (err && err.status) || '', JSON.stringify((err && err.data) || (err && err.message) || err));
+    const status = (err && err.status) || 500;
+    res.status(status).json({ error: 'Could not prepare checkout pricing', message: (err && err.message) || 'Unexpected error' });
   }
 });
 
