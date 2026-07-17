@@ -87,7 +87,14 @@ async function getVariantPrice(handle, variantTitle) {
   );
   const product = data.products && data.products[0];
   if (!product) return null;
-  const variant = product.variants.find(function(v) { return v.title === variantTitle; });
+  /*
+   * Match on option1, not the full variant title. The pricing_table metafield's
+   * size option always encodes Shopify's *first* product option only (cmproduct.liquid's
+   * syncVariant() does the same option1 match) — products with a second option (e.g.
+   * shape/material) have a variant.title like "Up to 50mm x 50mm / Circle", which never
+   * equals the plain size string the client sends.
+   */
+  const variant = product.variants.find(function(v) { return v.option1 === variantTitle; });
   if (!variant) return null;
   return parseFloat(variant.price);
 }
