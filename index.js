@@ -87,14 +87,27 @@ async function getVariantPrice(handle, variantTitle) {
   );
   const product = data.products && data.products[0];
   if (!product) return null;
+  const variants = product.variants || [];
+
   /*
-   * Match on option1, not the full variant title. The pricing_table metafield's
-   * size option always encodes Shopify's *first* product option only (cmproduct.liquid's
-   * syncVariant() does the same option1 match) — products with a second option (e.g.
-   * shape/material) have a variant.title like "Up to 50mm x 50mm / Circle", which never
-   * equals the plain size string the client sends.
+   * Some products have a single real Shopify variant while the pricing_table
+   * metafield encodes several "up to Xmm" size tiers purely for pricing display —
+   * those tier labels were never meant to map to distinct Shopify variants, so no
+   * option1 match will ever exist. cmproduct.liquid's own syncVariant() has this
+   * exact same special case (VARIANTS.length === 1 always uses that one variant,
+   * no name matching) — mirror it here rather than failing closed on a mismatch
+   * that was never a real error.
    */
-  const variant = product.variants.find(function(v) { return v.option1 === variantTitle; });
+  if (variants.length === 1) return parseFloat(variants[0].price);
+
+  /*
+   * Otherwise match on option1, not the full variant title. The pricing_table's
+   * size option always encodes Shopify's *first* product option only — products
+   * with a second option (e.g. shape/material) have a variant.title like
+   * "Up to 50mm x 50mm / Circle", which never equals the plain size string sent
+   * by the client.
+   */
+  const variant = variants.find(function(v) { return v.option1 === variantTitle; });
   if (!variant) return null;
   return parseFloat(variant.price);
 }
