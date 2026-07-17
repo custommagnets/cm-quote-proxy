@@ -3,6 +3,14 @@ const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
 const app = express();
 
+/* Render (and Cloudflare in front of it) sit as a reverse proxy between the client and
+ * this app, so every request arrives with an X-Forwarded-For header. Without telling
+ * Express to trust that hop, express-rate-limit refuses to use it for its IP-based key
+ * generator and throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR — which, uncaught, becomes an
+ * unhandled rejection and crashes the whole process (Node terminates on unhandled
+ * rejections by default), taking down every endpoint until Render restarts it. */
+app.set('trust proxy', 1);
+
 /* ── CORS — restrict to Custom Magnets storefront origins ── */
 const ALLOWED_ORIGINS = [
   'https://custommagnets.co.uk',
