@@ -477,6 +477,44 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
      * overcharge (£420.00 vs the £419.30 actually quoted). The true quantity is
      * still recorded in the title, note, and note_attributes for the order record.
      */
+    const noteLines = [
+      '═══ DIRECT PRODUCT PURCHASE ═══',
+      'Product: ' + validated.product_title,
+      'Size: ' + validated.size,
+      'Quantity: ' + quantity,
+      'Validated unit price: £' + validated.unit_price.toFixed(2),
+      'Validated total: £' + validated.total.toFixed(2)
+    ];
+    const noteAttrs = [
+      { name: 'Product', value: validated.product_title },
+      { name: 'Size', value: validated.size },
+      { name: 'Quantity', value: String(quantity) },
+      { name: 'Unit Price', value: '£' + validated.unit_price.toFixed(2) },
+      { name: 'Total', value: '£' + validated.total.toFixed(2) },
+      { name: 'Price Validated', value: 'Yes' }
+    ];
+    var tags = 'product-page-purchase';
+
+    /*
+     * Optional artwork/custom-brief metadata — sent by the configurator's "Add to
+     * basket" step (which uploads artwork before checkout, unlike a plain product-page
+     * purchase). Purely informational: never affects the validated price above.
+     */
+    if (p.artwork_url) {
+      noteLines.push('', '── Artwork ──', 'Filename: ' + (p.artwork_filename || 'None'), 'Download: ' + p.artwork_url);
+      noteAttrs.push({ name: 'Artwork File', value: p.artwork_filename || '' }, { name: 'Artwork URL', value: p.artwork_url });
+      tags += ',configurator';
+    }
+    if (p.artwork_notes) {
+      noteLines.push('Notes: ' + p.artwork_notes);
+      noteAttrs.push({ name: 'Artwork Notes', value: p.artwork_notes });
+    }
+    if (p.custom_brief) {
+      noteLines.push('', '── Custom Brief ──', p.custom_brief);
+      noteAttrs.push({ name: 'Custom Brief', value: p.custom_brief });
+      tags += ',custom-shape';
+    }
+
     const draftOrder = {
       draft_order: {
         line_items: [{
@@ -485,23 +523,9 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
           price: validated.total.toFixed(2),
           requires_shipping: true
         }],
-        note: [
-          '═══ DIRECT PRODUCT PURCHASE ═══',
-          'Product: ' + validated.product_title,
-          'Size: ' + validated.size,
-          'Quantity: ' + quantity,
-          'Validated unit price: £' + validated.unit_price.toFixed(2),
-          'Validated total: £' + validated.total.toFixed(2)
-        ].join('\n'),
-        tags: 'product-page-purchase',
-        note_attributes: [
-          { name: 'Product', value: validated.product_title },
-          { name: 'Size', value: validated.size },
-          { name: 'Quantity', value: String(quantity) },
-          { name: 'Unit Price', value: '£' + validated.unit_price.toFixed(2) },
-          { name: 'Total', value: '£' + validated.total.toFixed(2) },
-          { name: 'Price Validated', value: 'Yes' }
-        ]
+        note: noteLines.join('\n'),
+        tags: tags,
+        note_attributes: noteAttrs
       }
     };
 
