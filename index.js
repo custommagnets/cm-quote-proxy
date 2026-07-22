@@ -672,6 +672,56 @@ app.post('/cart-discount', cartDiscountLimiter, async (req, res) => {
   }
 });
 
+const tieredQuoteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again shortly.' }
+});
+
+/*
+ * POST /tiered-quote — read-only pricing lookup for the cart drawer.
+ *
+ * Two "Add to basket" clicks for the same product/size (e.g. 100 units, then
+ * another 100) land as two separate native cart lines rather than one merged
+ * 200-unit line, so each line's own stashed _cm_total property only reflects its
+ * own quantity's tier — summing them for display would still show the wrong
+ * (higher) subtotal even though /cart-discount already prices the *combined*
+ * quantity correctly at actual checkout. This lets the drawer ask, ahead of
+ * checkout, what the combined quantity really prices out to.
+ *
+ * Unlike /cart-discount, this never creates a price rule or discount code — it's
+ * a pure lookup via the same validateTieredPrice() used elsewhere, safe to call
+ * on every cart render. Fails open per-line: a line that can't be validated is
+ * just omitted from the response (the drawer falls back to its stale sum for
+ * that line) rather than blocking the whole request, since nothing here affects
+ * the real checkout charge.
+ */
+app.post('/tiered-quote', tieredQuoteLimiter, async (req, res) => {
+  try {
+    const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
+    var results = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var quantity = parseInt(line.quantity, 10);
+      if (!line.handle || !line.size || !quantity || quantity < 1) continue;
+      try {
+        var validated = await validateTieredPrice(line.handle, line.size, quantity);
+        if (validated) {
+          results.push({ handle: line.handle, size: line.size, quantity: quantity, unit_price: validated.unit_price, total: validated.total });
+        }
+      } catch (e) {
+        console.error('Tiered quote failed for "' + line.handle + '" (' + line.size + '):', (e && e.status) || '', JSON.stringify((e && e.data) || (e && e.message) || e));
+      }
+    }
+    res.json({ success: true, lines: results });
+  } catch (err) {
+    console.error('Tiered quote error:', (err && err.status) || '', JSON.stringify((err && err.data) || (err && err.message) || err));
+    res.status(500).json({ error: 'Could not fetch pricing', message: (err && err.message) || 'Unexpected error' });
+  }
+});
+
 /*
  * GET /reviews — live Google Business Profile reviews for the homepage.
  * Read-only, cached, no rate limiting needed beyond what caching already provides
