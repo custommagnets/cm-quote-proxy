@@ -751,7 +751,20 @@ app.get('/reviews', async (req, res) => {
     res.status(502).json({ error: 'Could not fetch reviews' });
   }
 });
-
+/* ── Sweets product sync — protected by shared secret ── */
+app.post('/sync/sweets', async (req, res) => {
+  const providedSecret = req.headers['x-sync-secret'];
+  if (!SYNC_SECRET || providedSecret !== SYNC_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await runSweetsSync();
+    res.json(result);
+  } catch (err) {
+    console.error('Sweets sync error:', err.message);
+    res.status(500).json({ error: 'Sync failed', message: err.message });
+  }
+});
 /* Health check */
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'cm-quote-proxy' }));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
