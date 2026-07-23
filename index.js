@@ -1,7 +1,6 @@
 const express = require('express');
 const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
-const { runSweetsSync } = require('./sync-sweets'); // ← ADDED: Sweets product sync
 const app = express();
 
 /* Render (and Cloudflare in front of it) sit as a reverse proxy between the client and
@@ -41,7 +40,6 @@ const EMAIL_FROM = process.env.EMAIL_FROM || 'Custom Magnets <sales@custommagnet
 const EMAIL_TO  = process.env.EMAIL_TO  || 'sales@custommagnets.co.uk';
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
 const GOOGLE_PLACE_ID = process.env.GOOGLE_PLACE_ID;
-const SYNC_SECRET = process.env.SYNC_SECRET; // ← ADDED: shared secret to protect /sync/sweets
 
 const API_VERSION = '2026-04';
 const QTY_TIERS = [25, 50, 100, 250, 500, 1000];
@@ -471,6 +469,14 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
       return res.status(422).json({ error: 'Could not validate price for this product, size, and quantity' });
     }
 
+    /*
+     * Charge quantity 1 at the exact validated total, rather than the rounded
+     * per-unit price times quantity. Shopify's checkout multiplies price × quantity
+     * itself, so sending a rounded unit price (e.g. £1.39767 -> "1.40") at qty 300
+     * would let a fraction-of-a-penny rounding error compound into a real
+     * overcharge (£420.00 vs the £419.30 actually quoted). The true quantity is
+     * still recorded in the title, note, and note_attributes for the order record.
+     */
     const noteLines = [
       '═══ DIRECT PRODUCT PURCHASE ═══',
       'Product: ' + validated.product_title,
@@ -489,6 +495,11 @@ app.post('/price-checkout', checkoutLimiter, async (req, res) => {
     ];
     var tags = 'product-page-purchase';
 
+    /*
+     * Optional artwork/custom-brief metadata — sent by the configurator's "Add to
+     * basket" step (which uploads artwork before checkout, unlike a plain product-page
+     * purchase). Purely informational: never affects the validated price above.
+     */
     if (p.artwork_url) {
       noteLines.push('', '── Artwork ──', 'Filename: ' + (p.artwork_filename || 'None'), 'Download: ' + p.artwork_url);
       noteAttrs.push({ name: 'Artwork File', value: p.artwork_filename || '' }, { name: 'Artwork URL', value: p.artwork_url });
@@ -565,6 +576,25 @@ function generateDiscountCode() {
   return 'CM-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
 }
 
+/*
+ * POST /cart-discount — the native-cart counterpart to /price-checkout.
+ *
+ * Product pages now add tiered-priced lines straight to Shopify's real cart via
+ * /cart/add.js (so multiple products/items accumulate normally in one basket instead
+ * of each purchase spawning its own draft order). But the native cart can only charge
+ * variant.price × quantity, which is always the UNDISCOUNTED base price for a tiered
+ * line — so before the customer reaches checkout, the storefront calls this endpoint
+ * with the tiered lines currently in their cart ({handle, size, quantity} — the same
+ * identifiers /price-checkout uses, read off each line's item properties). For each
+ * one it re-validates the true tiered total against the pricing_table metafield
+ * (server-side, never trusting a client-sent price) and compares it against what the
+ * live variant price would charge, then creates a single one-time discount code for
+ * the exact difference. The storefront applies it via /checkout?discount=CODE.
+ *
+ * Fails closed like /price-checkout: if any tiered line can't be validated, no
+ * discount code is created and checkout is blocked with an error rather than letting
+ * the customer be overcharged the undiscounted price.
+ */
 app.post('/cart-discount', cartDiscountLimiter, async (req, res) => {
   try {
     const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
@@ -650,6 +680,24 @@ const tieredQuoteLimiter = rateLimit({
   message: { error: 'Too many requests. Please try again shortly.' }
 });
 
+/*
+ * POST /tiered-quote — read-only pricing lookup for the cart drawer.
+ *
+ * Two "Add to basket" clicks for the same product/size (e.g. 100 units, then
+ * another 100) land as two separate native cart lines rather than one merged
+ * 200-unit line, so each line's own stashed _cm_total property only reflects its
+ * own quantity's tier — summing them for display would still show the wrong
+ * (higher) subtotal even though /cart-discount already prices the *combined*
+ * quantity correctly at actual checkout. This lets the drawer ask, ahead of
+ * checkout, what the combined quantity really prices out to.
+ *
+ * Unlike /cart-discount, this never creates a price rule or discount code — it's
+ * a pure lookup via the same validateTieredPrice() used elsewhere, safe to call
+ * on every cart render. Fails open per-line: a line that can't be validated is
+ * just omitted from the response (the drawer falls back to its stale sum for
+ * that line) rather than blocking the whole request, since nothing here affects
+ * the real checkout charge.
+ */
 app.post('/tiered-quote', tieredQuoteLimiter, async (req, res) => {
   try {
     const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
@@ -674,6 +722,11 @@ app.post('/tiered-quote', tieredQuoteLimiter, async (req, res) => {
   }
 });
 
+/*
+ * GET /reviews — live Google Business Profile reviews for the homepage.
+ * Read-only, cached, no rate limiting needed beyond what caching already provides
+ * (at most one real Google API call every REVIEWS_CACHE_TTL_MS regardless of traffic).
+ */
 app.get('/reviews', async (req, res) => {
   try {
     const now = Date.now();
@@ -691,27 +744,9 @@ app.get('/reviews', async (req, res) => {
 
   } catch (err) {
     console.error('Reviews fetch failed:', err && (err.message || JSON.stringify(err.data || err)));
+    /* Serve stale cache rather than a hard failure if Google is briefly unavailable */
     if (reviewsCache.data) return res.json(reviewsCache.data);
     res.status(502).json({ error: 'Could not fetch reviews' });
-  }
-});
-
-/* ── ADDED: Sweets product sync ──
- * Protected by a shared secret (SYNC_SECRET) rather than left open, since this
- * endpoint writes to the Sweets Shopify store on every call — an unprotected
- * public endpoint could be triggered repeatedly by anyone who finds the URL.
- * Only Render's Cron Job (which sends the header below) should call this. */
-app.post('/sync/sweets', async (req, res) => {
-  const providedSecret = req.headers['x-sync-secret'];
-  if (!SYNC_SECRET || providedSecret !== SYNC_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    const result = await runSweetsSync();
-    res.json(result);
-  } catch (err) {
-    console.error('Sweets sync error:', err.message);
-    res.status(500).json({ error: 'Sync failed', message: err.message });
   }
 });
 
@@ -725,5 +760,4 @@ app.listen(PORT, () => {
   if (!SHOPIFY_TOKEN) console.warn('WARNING: SHOPIFY_TOKEN not set');
   if (!transporter) console.warn('WARNING: SMTP not configured — emails will be skipped');
   if (!GOOGLE_PLACES_API_KEY || !GOOGLE_PLACE_ID) console.warn('WARNING: Google Places API key/Place ID not set — /reviews will return 503');
-  if (!SYNC_SECRET) console.warn('WARNING: SYNC_SECRET not set — /sync/sweets is disabled');
 });
