@@ -41,6 +41,7 @@ const EMAIL_FROM = process.env.EMAIL_FROM || 'Custom Magnets <sales@custommagnet
 const EMAIL_TO  = process.env.EMAIL_TO  || 'sales@custommagnets.co.uk';
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
 const GOOGLE_PLACE_ID = process.env.GOOGLE_PLACE_ID;
+const SYNC_SECRET = process.env.SYNC_SECRET;
 
 const API_VERSION = '2026-04';
 const QTY_TIERS = [25, 50, 100, 250, 500, 1000];
