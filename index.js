@@ -1,6 +1,7 @@
 const express = require('express');
 const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
+const { runSweetsSync } = require('./sync-sweets');
 const app = express();
 
 /* Render (and Cloudflare in front of it) sit as a reverse proxy between the client and
