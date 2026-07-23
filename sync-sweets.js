@@ -61,6 +61,12 @@ async function shopifyGraphQL(token, query, variables) {
   return data.data;
 }
 
+function assertNoUserErrors(userErrors, context) {
+  if (userErrors && userErrors.length > 0) {
+    throw new Error(`${context}: ${userErrors.map(e => e.message).join('; ')}`);
+  }
+}
+
 async function findProductByHandle(token, handle) {
   const query = `
     query($handle: String!) {
@@ -102,7 +108,8 @@ async function attachMedia(token, productId, media) {
         mediaUserErrors { message }
       }
     }`;
-  await shopifyGraphQL(token, mutation, { productId, media });
+  const data = await shopifyGraphQL(token, mutation, { productId, media });
+  assertNoUserErrors(data.productCreateMedia.mediaUserErrors, 'productCreateMedia');
 }
 
 async function setVariantPrice(token, productId, variantId, price) {
@@ -112,10 +119,11 @@ async function setVariantPrice(token, productId, variantId, price) {
         userErrors { message }
       }
     }`;
-  await shopifyGraphQL(token, mutation, {
+  const data = await shopifyGraphQL(token, mutation, {
     productId,
     variants: [{ id: variantId, price }],
   });
+  assertNoUserErrors(data.productVariantsBulkUpdate.userErrors, 'productVariantsBulkUpdate');
 }
 
 async function upsertProduct(token, product) {
@@ -148,6 +156,7 @@ async function upsertProduct(token, product) {
         productUpdate(input: $input) { ${productSelection} userErrors { message } }
       }`;
     const data = await shopifyGraphQL(token, mutation, { input: { id: existing.id, ...input } });
+    assertNoUserErrors(data.productUpdate.userErrors, 'productUpdate');
     productId = data.productUpdate.product.id;
     variantId = data.productUpdate.product.variants.edges[0].node.id;
     result = "updated";
@@ -157,6 +166,7 @@ async function upsertProduct(token, product) {
         productCreate(input: $input) { ${productSelection} userErrors { message } }
       }`;
     const data = await shopifyGraphQL(token, mutation, { input });
+    assertNoUserErrors(data.productCreate.userErrors, 'productCreate');
     productId = data.productCreate.product.id;
     variantId = data.productCreate.product.variants.edges[0].node.id;
     result = "created";
