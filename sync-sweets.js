@@ -64,7 +64,11 @@ async function shopifyGraphQL(token, query, variables) {
 async function findProductByHandle(token, handle) {
   const query = `
     query($handle: String!) {
-      productByHandle(handle: $handle) { id }
+      productByHandle(handle: $handle) {
+        id
+        variants(first: 1) { edges { node { id } } }
+        media(first: 1) { edges { node { id } } }
+      }
     }`;
   const data = await shopifyGraphQL(token, query, { handle });
   return data.productByHandle;
@@ -74,10 +78,51 @@ function skuToHandle(sku) {
   return `sweet-${sku}`;
 }
 
+function buildMediaInputs(product) {
+  const urls = new Set();
+  const addImage = (img) => {
+    const url = img && (img.original || img.large || {}).url;
+    if (url) urls.add(url);
+  };
+
+  addImage(product.featured_image);
+  Object.values(product.gallery || {}).forEach(addImage);
+
+  return [...urls].map(url => ({
+    originalSource: url,
+    alt: product.title,
+    mediaContentType: "IMAGE",
+  }));
+}
+
+async function attachMedia(token, productId, media) {
+  const mutation = `
+    mutation($productId: ID!, $media: [CreateMediaInput!]!) {
+      productCreateMedia(productId: $productId, media: $media) {
+        mediaUserErrors { message }
+      }
+    }`;
+  await shopifyGraphQL(token, mutation, { productId, media });
+}
+
+async function setVariantPrice(token, productId, variantId, price) {
+  const mutation = `
+    mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+        userErrors { message }
+      }
+    }`;
+  await shopifyGraphQL(token, mutation, {
+    productId,
+    variants: [{ id: variantId, price }],
+  });
+}
+
 async function upsertProduct(token, product) {
   const handle = skuToHandle(product.sku);
   const existing = await findProductByHandle(token, handle);
   const markedUpPricing = calculateMarkedUpPricing(product.pricing);
+  const basePrice = markedUpPricing[0].unit_pricing;
 
   const input = {
     title: product.title,
@@ -94,21 +139,40 @@ async function upsertProduct(token, product) {
     ],
   };
 
+  const productSelection = `product { id variants(first: 1) { edges { node { id } } } }`;
+
+  let productId, variantId, result;
   if (existing) {
     const mutation = `
       mutation($input: ProductInput!) {
-        productUpdate(input: $input) { product { id } userErrors { message } }
+        productUpdate(input: $input) { ${productSelection} userErrors { message } }
       }`;
-    await shopifyGraphQL(token, mutation, { input: { id: existing.id, ...input } });
-    return "updated";
+    const data = await shopifyGraphQL(token, mutation, { input: { id: existing.id, ...input } });
+    productId = data.productUpdate.product.id;
+    variantId = data.productUpdate.product.variants.edges[0].node.id;
+    result = "updated";
   } else {
     const mutation = `
       mutation($input: ProductInput!) {
-        productCreate(input: $input) { product { id } userErrors { message } }
+        productCreate(input: $input) { ${productSelection} userErrors { message } }
       }`;
-    await shopifyGraphQL(token, mutation, { input });
-    return "created";
+    const data = await shopifyGraphQL(token, mutation, { input });
+    productId = data.productCreate.product.id;
+    variantId = data.productCreate.product.variants.edges[0].node.id;
+    result = "created";
   }
+
+  await setVariantPrice(token, productId, variantId, basePrice);
+
+  const hasExistingMedia = existing && existing.media.edges.length > 0;
+  if (!hasExistingMedia) {
+    const mediaInputs = buildMediaInputs(product);
+    if (mediaInputs.length > 0) {
+      await attachMedia(token, productId, mediaInputs);
+    }
+  }
+
+  return result;
 }
 
 async function runSweetsSync() {
