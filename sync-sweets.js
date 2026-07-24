@@ -153,7 +153,7 @@ async function upsertProduct(token, product) {
     status: product.discontinued ? "ARCHIVED" : "ACTIVE",
     metafields: [
       {
-        namespace: "custom_magnets",
+        namespace: "custom_sweets",
         key: "pricing_table",
         type: "json",
         value: JSON.stringify(markedUpPricing),
