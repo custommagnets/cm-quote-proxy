@@ -47,6 +47,18 @@ function calculateMarkedUpPricing(supplierPricingArray) {
   });
 }
 
+function buildPricingTableMetafield(markedUpPricing) {
+  return {
+    optionLabel: "Quantity",
+    options: [
+      {
+        name: "Standard",
+        rows: markedUpPricing.map(tier => [tier.value, tier.total]),
+      },
+    ],
+  };
+}
+
 async function shopifyGraphQL(token, query, variables) {
   const res = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-10/graphql.json`, {
     method: "POST",
@@ -156,7 +168,7 @@ async function upsertProduct(token, product) {
         namespace: "custom_sweets",
         key: "pricing_table",
         type: "json",
-        value: JSON.stringify(markedUpPricing),
+        value: JSON.stringify(buildPricingTableMetafield(markedUpPricing)),
       },
     ],
   };
