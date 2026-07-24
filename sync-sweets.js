@@ -130,7 +130,12 @@ async function setVariantPrice(token, productId, variantId, price) {
     }`;
   const data = await shopifyGraphQL(token, mutation, {
     productId,
-    variants: [{ id: variantId, price }],
+    variants: [{
+      id: variantId,
+      price,
+      inventoryPolicy: "CONTINUE",
+      inventoryItem: { tracked: false },
+    }],
   });
   assertNoUserErrors(data.productVariantsBulkUpdate.userErrors, 'productVariantsBulkUpdate');
 }
