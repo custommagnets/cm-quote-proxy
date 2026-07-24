@@ -80,14 +80,23 @@ async function findProductByHandle(token, handle) {
   return data.productByHandle;
 }
 
-function skuToHandle(sku) {
-  return `sweet-${sku}`;
+function skuToHandle(sku, skuId) {
+  return sku ? `sweet-${sku}` : `sweet-id-${skuId}`;
+}
+
+function normalizeImageUrl(url) {
+  try {
+    return new URL(url).href;
+  } catch {
+    return null;
+  }
 }
 
 function buildMediaInputs(product) {
   const urls = new Set();
   const addImage = (img) => {
-    const url = img && (img.original || img.large || {}).url;
+    const rawUrl = img && (img.original || img.large || {}).url;
+    const url = rawUrl && normalizeImageUrl(rawUrl);
     if (url) urls.add(url);
   };
 
@@ -127,7 +136,7 @@ async function setVariantPrice(token, productId, variantId, price) {
 }
 
 async function upsertProduct(token, product) {
-  const handle = skuToHandle(product.sku);
+  const handle = skuToHandle(product.sku, product.sku_id);
   const existing = await findProductByHandle(token, handle);
   const markedUpPricing = calculateMarkedUpPricing(product.pricing);
   const basePrice = markedUpPricing[0].unit_pricing;
