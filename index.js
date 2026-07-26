@@ -1,7 +1,6 @@
 const express = require('express');
 const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
-const { runSweetsSync } = require('./niches/sweets/sync-sweets');
 const app = express();
 
 /* Render (and Cloudflare in front of it) sit as a reverse proxy between the client and
@@ -41,7 +40,6 @@ const EMAIL_FROM = process.env.EMAIL_FROM || 'Custom Magnets <sales@custommagnet
 const EMAIL_TO  = process.env.EMAIL_TO  || 'sales@custommagnets.co.uk';
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
 const GOOGLE_PLACE_ID = process.env.GOOGLE_PLACE_ID;
-const SYNC_SECRET = process.env.SYNC_SECRET;
 
 const API_VERSION = '2026-04';
 const QTY_TIERS = [25, 50, 100, 250, 500, 1000];
@@ -751,17 +749,29 @@ app.get('/reviews', async (req, res) => {
     res.status(502).json({ error: 'Could not fetch reviews' });
   }
 });
-/* ── Sweets product sync — protected by shared secret ── */
-app.post('/sync/sweets', async (req, res) => {
+/* ── Generic niche product sync — protected by a per-niche shared secret.
+ * To add a new niche: add one entry below and create niches/{name}/ with a
+ * module exporting `runSync`. No other changes to this file are needed. ── */
+const NICHE_SYNCS = {
+  sweets: './niches/sweets/sync-sweets',
+};
+
+app.post('/sync/:niche', async (req, res) => {
+  const modulePath = NICHE_SYNCS[req.params.niche];
+  if (!modulePath) return res.status(404).json({ error: 'Unknown niche' });
+
   const providedSecret = req.headers['x-sync-secret'];
-  if (!SYNC_SECRET || providedSecret !== SYNC_SECRET) {
+  const expectedSecret = process.env[`${req.params.niche.toUpperCase()}_SYNC_SECRET`];
+  if (!expectedSecret || providedSecret !== expectedSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+
   try {
-    const result = await runSweetsSync();
+    const { runSync } = require(modulePath);
+    const result = await runSync();
     res.json(result);
   } catch (err) {
-    console.error('Sweets sync error:', err.message);
+    console.error(`Sync failed for niche ${req.params.niche}:`, err.message);
     res.status(500).json({ error: 'Sync failed', message: err.message });
   }
 });

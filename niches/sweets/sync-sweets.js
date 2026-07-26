@@ -211,7 +211,7 @@ async function upsertProduct(token, product) {
   return result;
 }
 
-async function runSweetsSync() {
+async function runSync() {
   const token = await getAccessToken();
 
   const res = await fetch(FEED_URL);
@@ -235,4 +235,4 @@ async function runSweetsSync() {
   return { created, updated, failed, total: products.length };
 }
 
-module.exports = { runSweetsSync };
+module.exports = { runSync };
