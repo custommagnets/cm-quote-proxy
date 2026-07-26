@@ -1,2 +1,8 @@
 node_modules/
 shopify.app.toml
+
+# Sweets-specific business logic — moved to ~/Businesses/custom-sweets/ (2026-07-26).
+# Local copies here are kept temporarily as a fallback until the moved version is
+# confirmed working end-to-end, then should be deleted from this repo.
+sync-sweets.js
+sweets-pricing-config.json
