@@ -1,5 +1,9 @@
 {
-  "flat_markup_pct": 100,
-  "shipping_markup_pct": 5,
+  "markup_tiers": [
+    { "min_qty": 0, "markup_pct": 60 },
+    { "min_qty": 250, "markup_pct": 45 },
+    { "min_qty": 1000, "markup_pct": 35 },
+    { "min_qty": 2500, "markup_pct": 25 }
+  ],
   "origination_markup_gbp": 10
 }

@@ -1,0 +1,45 @@
+# Daily Custom Sweets supplier-feed sync (replaces the Render cron job, which no
+# longer exists; the sync silently stopped after 11 Sep 2026 with nothing to trigger it).
+#
+# Runs niches/sweets/sync-sweets.js directly on GitHub's runners rather than calling
+# the Render web service, so it isn't affected by the free instance spinning down or
+# by request timeouts, and run logs are kept for 90 days. A run with any failed
+# products exits non-zero, so GitHub emails the repo owner.
+#
+# Needs these repository secrets (Settings > Secrets and variables > Actions):
+#   SWEETS_CLIENT_ID, SWEETS_CLIENT_SECRET, SWEETS_FEED_URL
+# Run it by hand any time from the Actions tab ("Run workflow").
+
+name: Sweets sync
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # 05:00 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: sweets-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run sync
+        env:
+          SWEETS_CLIENT_ID: ${{ secrets.SWEETS_CLIENT_ID }}
+          SWEETS_CLIENT_SECRET: ${{ secrets.SWEETS_CLIENT_SECRET }}
+          SWEETS_FEED_URL: ${{ secrets.SWEETS_FEED_URL }}
+        run: |
+          node -e "
+            require('./niches/sweets/sync-sweets').runSync()
+              .then(r => { console.log(JSON.stringify(r)); if (r.failed > 0) process.exit(1); })
+              .catch(e => { console.error(e); process.exit(1); });
+          "
