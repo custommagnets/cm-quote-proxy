@@ -5,10 +5,10 @@
 // static token — this fetches a fresh access token (valid ~24h) at the start of
 // each sync run rather than relying on a long-lived SHOPIFY_TOKEN env var.
 
-const SHOPIFY_STORE = "customsweets.myshopify.com";
-const CLIENT_ID = process.env.SWEETS_CLIENT_ID;
-const CLIENT_SECRET = process.env.SWEETS_CLIENT_SECRET;
-const FEED_URL = process.env.SWEETS_FEED_URL;
+const SHOPIFY_STORE = "xxcyzp-vn.myshopify.com"; // permanent domain (customsweets.myshopify.com is an alias)
+const CLIENT_ID = (process.env.SWEETS_CLIENT_ID || "").trim();
+const CLIENT_SECRET = (process.env.SWEETS_CLIENT_SECRET || "").trim();
+const FEED_URL = (process.env.SWEETS_FEED_URL || "").trim();
 // Was 2024-10, long past Shopify's support window. productSet + productOptions
 // and productByIdentifier need a current version.
 const API_VERSION = "2026-10";
@@ -27,8 +27,16 @@ async function getAccessToken() {
       client_secret: CLIENT_SECRET
     })
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error('Failed to get access token: ' + JSON.stringify(data));
+  // Shopify answers bad credentials with an HTML error page, not JSON, so read
+  // text and surface the page title (e.g. "Oauth error application_cannot_be_found").
+  const text = await res.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch {}
+  if (!res.ok || !data.access_token) {
+    const title = (text.match(/<title>([^<]*)<\/title>/) || [])[1];
+    throw new Error(`Failed to get access token (HTTP ${res.status}): ${title || data.error_description || data.error || text.slice(0, 200)}`
+      + ` [client id length ${CLIENT_ID.length}, expected 32]`);
+  }
   return data.access_token;
 }
 

@@ -5,7 +5,7 @@
 // Usage (from this folder, with the same env vars Render has):
 //   SWEETS_CLIENT_ID=... SWEETS_CLIENT_SECRET=... SWEETS_FEED_URL=... node diagnose-sync.js
 
-const STORE = "customsweets.myshopify.com";
+const STORE = "xxcyzp-vn.myshopify.com";
 const API_VERSION = "2026-10";
 
 function ok(msg) { console.log("  OK   " + msg); }
