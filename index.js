@@ -88,8 +88,10 @@ async function validatePrice(handle, variantTitle, quantity) {
 
 /* Plain variant price lookup — no tier multiplier applied. Used to work out what the
  * native Shopify cart would charge for a tiered line (variant.price × quantity) so
- * /cart-discount can compute exactly how much to knock off at checkout. */
-async function getVariantPrice(handle, variantTitle) {
+ * /cart-discount can compute exactly how much to knock off at checkout. Also returns the
+ * matching variant ids, which /cart-discount locks its discount code to.
+ * Returns { price, ids } or null. */
+async function getVariantInfo(handle, variantTitle) {
   const data = await shopifyFetch(
     '/products.json?handle=' + encodeURIComponent(handle) + '&fields=id,title,variants'
   );
@@ -106,7 +108,7 @@ async function getVariantPrice(handle, variantTitle) {
    * no name matching) — mirror it here rather than failing closed on a mismatch
    * that was never a real error.
    */
-  if (variants.length === 1) return parseFloat(variants[0].price);
+  if (variants.length === 1) return { price: parseFloat(variants[0].price), ids: [variants[0].id] };
 
   /*
    * Otherwise match on option1, not the full variant title. The pricing_table's
@@ -115,9 +117,10 @@ async function getVariantPrice(handle, variantTitle) {
    * "Up to 50mm x 50mm / Circle", which never equals the plain size string sent
    * by the client.
    */
-  const variant = variants.find(function(v) { return v.option1 === variantTitle; });
-  if (!variant) return null;
-  return parseFloat(variant.price);
+  const matches = variants.filter(function(v) { return v.option1 === variantTitle; });
+  if (!matches.length) return null;
+  // All variants sharing this size (e.g. "Up to 50mm / Circle" and "/ Square") — the cart line is one of them.
+  return { price: parseFloat(matches[0].price), ids: matches.map(function(v) { return v.id; }) };
 }
 
 /*
@@ -604,6 +607,8 @@ app.post('/cart-discount', cartDiscountLimiter, async (req, res) => {
 
     var totalDiscount = 0;
     var breakdown = [];
+    var entitledIds = [];      // variants the correction may be spent on
+    var entitledNative = 0;    // their undiscounted total = minimum spend for the code
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
@@ -617,7 +622,8 @@ app.post('/cart-discount', cartDiscountLimiter, async (req, res) => {
         return res.status(422).json({ error: 'Could not validate price for "' + line.handle + '" (' + line.size + ')' });
       }
 
-      var nativePrice = await getVariantPrice(line.handle, line.size);
+      var variantInfo = await getVariantInfo(line.handle, line.size);
+      var nativePrice = variantInfo ? variantInfo.price : null;
       if (nativePrice === null) {
         return res.status(422).json({ error: 'Could not look up native price for "' + line.handle + '" (' + line.size + ')' });
       }
@@ -625,6 +631,10 @@ app.post('/cart-discount', cartDiscountLimiter, async (req, res) => {
       var nativeTotal = +(nativePrice * quantity).toFixed(2);
       var lineDiscount = Math.max(0, +(nativeTotal - validated.total).toFixed(2));
       totalDiscount = +(totalDiscount + lineDiscount).toFixed(2);
+      if (lineDiscount > 0) {
+        variantInfo.ids.forEach(function(id) { if (entitledIds.indexOf(id) === -1) entitledIds.push(id); });
+        entitledNative = +(entitledNative + nativeTotal).toFixed(2);
+      }
       breakdown.push({ handle: line.handle, size: line.size, quantity: quantity, native_total: nativeTotal, validated_total: validated.total, discount: lineDiscount });
     }
 
@@ -633,25 +643,39 @@ app.post('/cart-discount', cartDiscountLimiter, async (req, res) => {
     }
 
     const code = generateDiscountCode();
-    const priceRule = {
-      price_rule: {
-        title: 'CM Tiered Price Correction — ' + code,
-        target_type: 'line_item',
-        target_selection: 'all',
-        allocation_method: 'across',
-        value_type: 'fixed_amount',
-        value: '-' + totalDiscount.toFixed(2),
-        customer_selection: 'all',
-        starts_at: new Date().toISOString(),
-        ends_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-        usage_limit: 1
-      }
+    const baseRule = {
+      title: 'CM Tiered Price Correction — ' + code,
+      target_type: 'line_item',
+      allocation_method: 'across',
+      value_type: 'fixed_amount',
+      value: '-' + totalDiscount.toFixed(2),
+      customer_selection: 'all',
+      starts_at: new Date().toISOString(),
+      ends_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      usage_limit: 1
     };
-
-    const ruleData = await shopifyFetch('/price_rules.json', {
-      method: 'POST',
-      body: JSON.stringify(priceRule)
+    /*
+     * Lock the code to the basket it was priced for (fixed 18 Nov 2026). Previously it was
+     * target_selection 'all' with no minimum, so for its 30 minutes it could be spent on any
+     * other items (an end-to-end test turned a lone £10 sample pack into a £0 order).
+     * Now it only discounts the tiered variants it was calculated for, and only when those
+     * variants are still in the basket at their full undiscounted value.
+     */
+    const lockedRule = Object.assign({}, baseRule, {
+      target_selection: 'entitled',
+      entitled_variant_ids: entitledIds,
+      prerequisite_subtotal_range: { greater_than_or_equal_to: entitledNative.toFixed(2) }
     });
+
+    var ruleData;
+    try {
+      ruleData = await shopifyFetch('/price_rules.json', { method: 'POST', body: JSON.stringify({ price_rule: lockedRule }) });
+      if (!(ruleData.price_rule && ruleData.price_rule.id)) throw { status: 502, data: ruleData };
+    } catch (lockErr) {
+      // Never block a real checkout over this: fall back to the old unrestricted rule, but log loudly.
+      console.error('CART DISCOUNT LOCK FAILED, using unrestricted rule:', (lockErr && lockErr.status) || '', JSON.stringify((lockErr && lockErr.data) || (lockErr && lockErr.message) || lockErr));
+      ruleData = await shopifyFetch('/price_rules.json', { method: 'POST', body: JSON.stringify({ price_rule: Object.assign({}, baseRule, { target_selection: 'all' }) }) });
+    }
 
     const ruleId = ruleData.price_rule && ruleData.price_rule.id;
     if (!ruleId) throw { status: 502, data: ruleData };
@@ -661,7 +685,7 @@ app.post('/cart-discount', cartDiscountLimiter, async (req, res) => {
       body: JSON.stringify({ discount_code: { code: code } })
     });
 
-    console.log('Cart discount code created:', code, '-£' + totalDiscount.toFixed(2), JSON.stringify(breakdown));
+    console.log('Cart discount code created:', code, '-£' + totalDiscount.toFixed(2), 'entitled', JSON.stringify(entitledIds), 'min £' + entitledNative.toFixed(2), JSON.stringify(breakdown));
 
     res.json({ success: true, discount_code: code, discount_amount: totalDiscount });
 
