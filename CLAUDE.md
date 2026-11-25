@@ -8,6 +8,9 @@ Render, that serves **multiple, unrelated Shopify stores**:
   checkout price correction (`/cart-discount`).
 - **Custom Sweets** (`customsweets.myshopify.com`) — live. Handled entirely by
   `niches/sweets/` and the generic sync route below.
+- **Brand My Tote** (new store, domain TBC) — IN BUILD, not deployed (24 Nov 2026). Lives in
+  `niches/totes/` (see its CLAUDE.md). Two root touchpoints only: `app.use('/totes', ...)` near the top
+  of `index.js` (above the Magnets CORS block) and the `totes` entry in `NICHE_SYNCS`.
 
 ## ⚠️ This file, and everything else at the repo root, is shared infrastructure
 

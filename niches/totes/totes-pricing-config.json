@@ -1,0 +1,93 @@
+{
+  "currency": "GBP",
+  "min_order_qty": 10,
+  "max_order_qty": 100000,
+  "quantity_tiers": [
+    10,
+    50,
+    100,
+    200,
+    300,
+    400,
+    500,
+    1000,
+    2500
+  ],
+  "markup_tiers": [
+    {
+      "min_qty": 10,
+      "markup_pct": 195
+    },
+    {
+      "min_qty": 50,
+      "markup_pct": 105
+    },
+    {
+      "min_qty": 100,
+      "markup_pct": 95
+    },
+    {
+      "min_qty": 200,
+      "markup_pct": 85
+    },
+    {
+      "min_qty": 300,
+      "markup_pct": 75
+    },
+    {
+      "min_qty": 400,
+      "markup_pct": 70
+    },
+    {
+      "min_qty": 500,
+      "markup_pct": 70
+    },
+    {
+      "min_qty": 1000,
+      "markup_pct": 65
+    },
+    {
+      "min_qty": 2500,
+      "markup_pct": 55
+    }
+  ],
+  "default_technique": "TD1",
+  "default_position": "FRONT",
+  "default_colours": 1,
+  "category_level3": "Tote bags",
+  "screen_technique_ids": [
+    "S1",
+    "S2",
+    "S3",
+    "ST1"
+  ],
+  "screen_underlay_on_non_white": true,
+  "white_color_codes": [
+    "06",
+    "AS",
+    "WW",
+    "WD",
+    "WH",
+    "NB",
+    "NW",
+    "RH"
+  ],
+  "unsupported_pricing_types": [
+    "Area"
+  ],
+  "vendor": "Brand My Tote",
+  "extra_categories": [
+    "Large shopping bags",
+    "Beach bags"
+  ],
+  "exclude_masters": [
+    "IT1639",
+    "MO8368",
+    "MO2127",
+    "MO6746",
+    "MO2855",
+    "MO3106",
+    "MO3216"
+  ],
+  "markup_note": "25 Nov 2026: Brad decided to follow the old site's prices. Markups are the median of old price / modelled TD1 cost across 13 matched bags; exact old totals override these for the 16 masters in old-site-prices.json."
+}

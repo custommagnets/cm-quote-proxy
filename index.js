@@ -11,6 +11,10 @@ const app = express();
  * rejections by default), taking down every endpoint until Render restarts it. */
 app.set('trust proxy', 1);
 
+/* ── Brand My Tote (niches/totes): self-contained router with its own CORS, body parser and
+ * rate limits. Mounted BEFORE the Magnets CORS block below so it never touches Magnets paths. ── */
+app.use('/totes', require('./niches/totes/router'));
+
 /* ── CORS — restrict to Custom Magnets storefront origins ── */
 const ALLOWED_ORIGINS = [
   'https://custommagnets.co.uk',
@@ -778,6 +782,7 @@ app.get('/reviews', async (req, res) => {
  * module exporting `runSync`. No other changes to this file are needed. ── */
 const NICHE_SYNCS = {
   sweets: './niches/sweets/sync-sweets',
+  totes: './niches/totes/sync-totes',
 };
 
 app.post('/sync/:niche', async (req, res) => {

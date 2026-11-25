@@ -1,0 +1,50 @@
+# Daily Brand My Tote supplier sync (Midocean). Same pattern as sweets-sync.yml: runs
+# niches/totes/sync-totes.js directly on GitHub's runners, so it is not affected by the Render
+# free instance spinning down or by request timeouts, and run logs are kept for 90 days.
+# A run with any failed products exits non-zero, so GitHub emails the repo owner.
+#
+# It updates prices (tier variants), print options and specs on existing products and creates
+# new Midocean totes as DRAFT. Titles, descriptions, status and images of existing products
+# are left alone.
+#
+# Needs these repository secrets (Settings > Secrets and variables > Actions):
+#   MIDOCEAN_API_KEY, TOTES_SHOPIFY_STORE, TOTES_CLIENT_ID, TOTES_CLIENT_SECRET
+# Keep the schedule commented out until the store is live and the first manual run has been checked.
+# Run it by hand any time from the Actions tab ("Run workflow").
+
+name: Totes sync
+
+on:
+  # schedule:
+  #   - cron: "30 5 * * *" # 05:30 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: totes-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Run sync
+        env:
+          MIDOCEAN_API_KEY: ${{ secrets.MIDOCEAN_API_KEY }}
+          TOTES_SHOPIFY_STORE: ${{ secrets.TOTES_SHOPIFY_STORE }}
+          TOTES_CLIENT_ID: ${{ secrets.TOTES_CLIENT_ID }}
+          TOTES_CLIENT_SECRET: ${{ secrets.TOTES_CLIENT_SECRET }}
+        run: |
+          node -e "
+            require('./niches/totes/sync-totes').runSync()
+              .then(r => { console.log(JSON.stringify(r)); if (r.failed > 0 || r.unpriceable > 0) process.exit(1); })
+              .catch(e => { console.error(e); process.exit(1); });
+          "
