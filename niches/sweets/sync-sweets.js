@@ -63,11 +63,21 @@ function markupPctFor(qty) {
   return pct;
 }
 
-function calculateMarkedUpPricing(supplierPricingArray) {
+// Moulded (3D) chocolate carries a one-off tooling charge per artwork design that
+// the feed price does not appear to include (26 Nov 2026). It is added once per order, without
+// markup, and spread over the tier quantity like origination. If the feed's own
+// origination ever reaches the charge, assume it is now included and add nothing.
+function toolingFor(sku, origination) {
+  const charge = (pricingConfig.tooling_charge_gbp || {})[String(sku)] || 0;
+  return origination >= charge ? 0 : charge;
+}
+
+function calculateMarkedUpPricing(supplierPricingArray, sku) {
   return supplierPricingArray.map(tier => {
     const unitPrice = parseFloat(tier.unit_pricing);
     const markedUpUnit = unitPrice * (1 + markupPctFor(tier.value) / 100);
-    const finalOrigination = tier.origination + pricingConfig.origination_markup_gbp;
+    const tooling = toolingFor(sku, tier.origination);
+    const finalOrigination = tier.origination + pricingConfig.origination_markup_gbp + tooling;
     const rawTotal = (markedUpUnit * tier.value) + finalOrigination;
     // Round the per-unit price to the penny first, then derive the total from it,
     // so table total === variant price x quantity === what checkout charges.
@@ -80,6 +90,7 @@ function calculateMarkedUpPricing(supplierPricingArray) {
       currency: tier.currency,
       tier_unit: tierUnit.toFixed(2),
       origination: finalOrigination,
+      tooling,
       total,
     };
   });
@@ -221,9 +232,14 @@ async function setTierVariants(token, productId, existingVariants, markedUpPrici
 async function upsertProduct(token, product) {
   const handle = skuToHandle(product.sku, product.sku_id);
   const existing = await findProductByHandle(token, handle);
-  const markedUpPricing = calculateMarkedUpPricing(product.pricing)
+  const markedUpPricing = calculateMarkedUpPricing(product.pricing, product.sku)
     .sort((a, b) => a.value - b.value);
   if (!markedUpPricing.length) throw new Error('no pricing tiers in feed');
+  if ((pricingConfig.tooling_charge_gbp || {})[String(product.sku)]) {
+    // Logs are public, so say whether it was added without printing supplier costs.
+    const added = markedUpPricing.filter(t => t.tooling > 0).length;
+    console.log(`Tooling charge for SKU ${product.sku}: added on ${added} of ${markedUpPricing.length} tiers`);
+  }
 
   const pricingMetafield = {
     namespace: "custom_sweets",

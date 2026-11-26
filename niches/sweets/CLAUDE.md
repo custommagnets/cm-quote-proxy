@@ -52,6 +52,14 @@ the older committed version (100% markup, overwrites title/description/status ea
 The store's last pricing update was 11 Sep 2026, so the daily sync had silently stopped.
 Always check `git status` here before assuming the deployed code matches local.
 
+## Tooling charge on moulded chocolate (26 Nov 2026)
+`tooling_charge_gbp` in the pricing config maps supplier SKU to a one-off charge per order
+(150 pounds on 200142, 100441, 100498, 100306, 100618). The product descriptions state it,
+and the feed price does not appear to include it (not confirmed with the supplier). Added once per order without markup,
+spread over the tier quantity; skipped if the feed's origination is already that high.
+Repeat orders of an existing design are charged it too, so refund or discount if the
+supplier does not charge again. A new moulded product needs its SKU added here.
+
 ## What gets overwritten on every sync vs. left alone
 As of 30 Aug 2026, existing products (matched by handle) have **only the pricing metafield
 + variant price** overwritten on each run — `title`, `handle`, `descriptionHtml`, and

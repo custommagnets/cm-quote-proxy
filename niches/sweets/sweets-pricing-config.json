@@ -5,5 +5,12 @@
     { "min_qty": 1000, "markup_pct": 35 },
     { "min_qty": 2500, "markup_pct": 25 }
   ],
-  "origination_markup_gbp": 10
+  "origination_markup_gbp": 10,
+  "tooling_charge_gbp": {
+    "200142": 150,
+    "100441": 150,
+    "100498": 150,
+    "100306": 150,
+    "100618": 150
+  }
 }
